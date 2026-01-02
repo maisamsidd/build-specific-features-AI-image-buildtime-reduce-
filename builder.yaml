@@ -1,0 +1,19 @@
+features:
+  feature1:
+    inputs:
+      - /home/maisam/go/platform-api/features/feature2
+    command: ./build.sh
+
+  feature2:
+    inputs:
+      - /home/maisam/go/platform-api/features/feature2
+    command: ./build.sh
+    depends_on:
+      - feature1
+
+  feature3:
+    inputs:
+      - features/feature3
+    command: ./build.sh
+    depends_on:
+      - feature1
