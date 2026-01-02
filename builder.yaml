@@ -1,7 +1,7 @@
 features:
   feature1:
     inputs:
-      - /home/maisam/go/platform-api/features/feature2
+      - /home/maisam/devops_local/go_scripts/deployment_status_api/
     command: ./build.sh
 
   feature2:
