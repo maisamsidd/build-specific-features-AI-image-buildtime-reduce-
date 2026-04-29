@@ -3,11 +3,13 @@ features:
     inputs:
       - /home/maisam/devops_local/go_scripts/deployment_status_api/
     command: ./build.sh
+    image: harbor.qbscocloud.net:30003/verseye-project/feature1
 
   feature2:
     inputs:
       - /home/maisam/go/platform-api/features/feature2
     command: ./build.sh
+    image: harbor.qbscocloud.net:30003/verseye-project/feature2
     depends_on:
       - feature1
 
@@ -15,5 +17,6 @@ features:
     inputs:
       - features/feature3
     command: ./build.sh
+    image: harbor.qbscocloud.net:30003/verseye-project/feature3
     depends_on:
       - feature1

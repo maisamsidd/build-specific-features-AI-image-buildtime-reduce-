@@ -16,6 +16,47 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// --- Harbor config ---
+const (
+	harborRegistry = "harbor.qbscocloud.net:30003"
+	harborProject  = "verseye-project"
+)
+
+// harborImage returns the full Harbor image reference for a feature and hash tag.
+// e.g. harbor.qbscocloud.net:30003/verseye-project/feature3:ab12cd34
+func harborImage(featureName, tag string) string {
+	return fmt.Sprintf("%s/%s/%s:%s", harborRegistry, harborProject, featureName, tag)
+}
+
+// harborLogin authenticates docker with Harbor using env vars
+// HARBOR_USER and HARBOR_PASSWORD (or HARBOR_TOKEN for robot accounts).
+func harborLogin() error {
+	user := os.Getenv("HARBOR_USER")
+	password := os.Getenv("HARBOR_PASSWORD")
+	if password == "" {
+		password = os.Getenv("HARBOR_TOKEN") // support robot account tokens
+	}
+	if user == "" || password == "" {
+		return fmt.Errorf("HARBOR_USER and HARBOR_PASSWORD (or HARBOR_TOKEN) env vars must be set")
+	}
+
+	r, w, _ := os.Pipe()
+	go func() {
+		w.WriteString(password)
+		w.Close()
+	}()
+
+	cmd := exec.Command("docker", "login", harborRegistry, "-u", user, "--password-stdin")
+	cmd.Stdin = r
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker login to Harbor failed: %w", err)
+	}
+	fmt.Printf("Logged in to Harbor: %s\n", harborRegistry)
+	return nil
+}
+
 // --- Hashing ---
 func HashDir(dir string) (string, error) {
 	var files []string
@@ -123,6 +164,11 @@ func BuildFeature(featureName string) error {
 
 	fmt.Println("Build order:", buildOrder)
 
+	// Login to Harbor once before any builds
+	if err := harborLogin(); err != nil {
+		return err
+	}
+
 	hashCache := make(map[string]string)
 	for _, fname := range buildOrder {
 		feat := cfg.Features[fname]
@@ -147,16 +193,51 @@ func BuildFeature(featureName string) error {
 		}
 
 		fmt.Println("BUILD", fname)
-		dockerTag := fmt.Sprintf("%s:%s", fname, newHash[:8])
-		cmd := exec.Command("docker", "build", "-t", dockerTag, feat.Inputs[0])
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
+
+		shortHash := newHash[:8]
+		localTag := fmt.Sprintf("%s:%s", fname, shortHash)
+		remoteTag := harborImage(fname, shortHash)
+
+		// 1. docker build — tag locally
+		buildCmd := exec.Command("docker", "build", "-t", localTag, feat.Inputs[0])
+		buildCmd.Stdout = os.Stdout
+		buildCmd.Stderr = os.Stderr
+		if err := buildCmd.Run(); err != nil {
 			return fmt.Errorf("docker build failed for %s: %w", fname, err)
 		}
 
+		// 2. docker tag — apply the full Harbor image reference
+		tagCmd := exec.Command("docker", "tag", localTag, remoteTag)
+		tagCmd.Stdout = os.Stdout
+		tagCmd.Stderr = os.Stderr
+		if err := tagCmd.Run(); err != nil {
+			return fmt.Errorf("docker tag failed for %s: %w", fname, err)
+		}
+		fmt.Printf("Tagged: %s -> %s\n", localTag, remoteTag)
+
+		// 3. docker push — push to Harbor
+		pushCmd := exec.Command("docker", "push", remoteTag)
+		pushCmd.Stdout = os.Stdout
+		pushCmd.Stderr = os.Stderr
+		if err := pushCmd.Run(); err != nil {
+			return fmt.Errorf("docker push failed for %s: %w", fname, err)
+		}
+		fmt.Printf("Pushed to Harbor: %s\n", remoteTag)
+
+		// 4. Update cache only after a successful push
 		cache.WriteFeatureHash(fname, newHash)
 		hashCache[fname] = newHash
+
+		// 5. docker run — start a container from the Harbor image
+		// containerName := fmt.Sprintf("%s_container", fname)
+		// fmt.Println("Starting container:", containerName)
+		// runCmd := exec.Command("docker", "run", "-d", "--name", containerName, remoteTag)
+		// runCmd.Stdout = os.Stdout
+		// runCmd.Stderr = os.Stderr
+		// if err := runCmd.Run(); err != nil {
+		// 	return fmt.Errorf("docker run failed for %s: %w", fname, err)
+		// }
+		// fmt.Printf("Container started: %s (image: %s)\n", containerName, remoteTag)
 	}
 	return nil
 }
